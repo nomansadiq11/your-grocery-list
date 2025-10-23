@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Shared Grocer List PWA</title>
+    <title>Shared Grocer List PWA (URL Sharing)</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -50,39 +50,28 @@
         <header class="bg-primary text-white p-4 flex justify-between items-center sticky top-0 z-10">
             <h1 class="text-xl font-bold">Shared Grocery List</h1>
             <div id="connection-status" class="text-sm font-medium flex items-center">
-                <span id="sync-dot" class="w-2 h-2 rounded-full mr-2 bg-red-400 transition-colors duration-500"></span>
-                <span id="sync-text">Offline/No List</span>
+                <span id="sync-dot" class="w-2 h-2 rounded-full mr-2 bg-yellow-400 transition-colors duration-500"></span>
+                <span id="sync-text">URL Sync Only</span>
             </div>
         </header>
 
         <main class="p-4">
 
-            <!-- Authentication and Connection Status -->
-            <div id="auth-info" class="text-xs text-gray-500 mb-4 bg-gray-50 p-2 rounded-lg">
-                Loading Auth...
+            <!-- Connection/Status Screen -->
+            <div id="status-info" class="text-xs text-gray-500 mb-4 bg-gray-50 p-2 rounded-lg text-center">
+                List status: Loaded from URL or new list started.
             </div>
 
-            <!-- Connection/Join Screen -->
-            <div id="connect-screen" class="space-y-4 p-6 border rounded-xl bg-white container-shadow">
-                <h2 class="text-2xl font-semibold text-primary">Start or Join a Shared List</h2>
-                <input type="text" id="list-code-input" placeholder="Enter 6-digit shared code (e.g., ABCDEF)" maxlength="6" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-secondary focus:ring-secondary transition">
-                <div class="flex space-x-3">
-                    <button id="join-list-btn" class="flex-1 bg-secondary hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-lg transition duration-200 shadow-md">
-                        Join List
+            <!-- Grocery List Display -->
+            <div id="list-container">
+                <div id="active-code-display" class="text-center mb-4 p-3 bg-secondary text-white rounded-lg shadow-md">
+                    <p class="text-sm font-medium">To share updates, click below:</p>
+                    <button onclick="copyCode()" class="mt-1 text-sm font-extrabold underline hover:opacity-80 transition">
+                        Tap to Copy Shareable Link
                     </button>
-                    <button id="create-new-list-btn" class="flex-1 bg-primary hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition duration-200 shadow-md">
-                        Create New List
-                    </button>
-                </div>
-                <p id="error-message" class="text-red-500 text-sm hidden"></p>
-            </div>
-
-            <!-- Grocery List Display (Hidden initially) -->
-            <div id="list-container" class="hidden">
-                <div id="active-code-display" class="text-center mb-4 p-3 bg-primary text-white rounded-lg shadow-md">
-                    <p class="text-sm font-medium">Your Shared Code:</p>
-                    <p id="current-code" class="text-2xl font-extrabold tracking-widest"></p>
-                    <button onclick="copyCode()" class="mt-1 text-xs underline opacity-80 hover:opacity-100">Tap to Copy Code</button>
+                    <p class="mt-2 text-xs opacity-80">
+                        (Note: Sharing is not real-time. You must share a new link after every change.)
+                    </p>
                 </div>
 
                 <!-- Category and Item Management -->
@@ -117,35 +106,24 @@
                 </div>
             </div>
 
+            <p id="error-message" class="text-red-500 text-sm hidden mt-4 p-2 bg-red-50 rounded-lg"></p>
+
+
         </main>
     </div>
 
-    <!-- Firebase SDKs -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, runTransaction, getDocs, where, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Global variables provided by the Canvas environment
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        let app, db, auth;
-        let userId = null;
-        let currentListCode = null;
-        let currentListRef = null;
-        let unsubscribeSnapshot = null;
-        let listData = { categories: [] }; // Local state copy of the list
+        // --- CONSTANTS AND STATE ---
+        const LIST_QUERY_PARAM = 'list';
+        const INITIAL_LIST_DATA = {
+            categories: [
+                { name: "Bakery Items", items: [] },
+                { name: "Produce (Fruits & Veg)", items: [] }
+            ]
+        };
+        let listData = {}; // Local state copy of the list
 
         // --- DOM Elements ---
-        const connectScreen = document.getElementById('connect-screen');
-        const listContainer = document.getElementById('list-container');
-        const listCodeInput = document.getElementById('list-code-input');
-        const joinListBtn = document.getElementById('join-list-btn');
-        const createNewListBtn = document.getElementById('create-new-list-btn');
-        const activeCodeDisplay = document.getElementById('current-code');
         const listItemsContainer = document.getElementById('list-items');
         const categorySelect = document.getElementById('category-select');
         const newItemText = document.getElementById('new-item-text');
@@ -154,7 +132,6 @@
         const errorMessage = document.getElementById('error-message');
         const syncDot = document.getElementById('sync-dot');
         const syncText = document.getElementById('sync-text');
-        const authInfo = document.getElementById('auth-info');
 
         // --- UTILITY FUNCTIONS ---
 
@@ -180,176 +157,85 @@
             modal.classList.remove('hidden');
         }
 
-        // Generates a 6-character uppercase alphanumeric code
-        function generateCode() {
-            return Math.random().toString(36).substring(2, 8).toUpperCase();
-        }
-
-        function setSyncStatus(isSynced, message) {
-            if (isSynced) {
-                syncDot.classList.remove('bg-red-400');
-                syncDot.classList.add('bg-green-400');
-                syncText.textContent = message || 'Live Sync';
-            } else {
-                syncDot.classList.remove('bg-green-400');
-                syncDot.classList.add('bg-red-400');
-                syncText.textContent = message || 'Offline/No List';
-            }
-        }
-
         function displayError(message) {
             errorMessage.textContent = message;
             errorMessage.classList.remove('hidden');
             setTimeout(() => { errorMessage.classList.add('hidden'); }, 5000);
         }
 
-        // --- FIREBASE SETUP & AUTHENTICATION ---
+        // --- DATA ENCODING & URL MANAGEMENT ---
 
-        async function setupFirebase() {
-            if (!firebaseConfig) {
-                authInfo.textContent = "Error: Firebase configuration is missing.";
-                return;
-            }
-
+        /**
+         * Encodes the current listData state into a compressed, URL-safe string.
+         * The list is JSON stringified, then Base64 encoded.
+         * @returns {string} The encoded list string.
+         */
+        function encodeListData() {
             try {
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                setLogLevel('debug'); // Enable Firestore logging
-
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        userId = user.uid;
-                        authInfo.textContent = `User ID: ${userId} (Use for support)`;
-                        setSyncStatus(false, 'Ready');
-                    } else {
-                        // Attempt silent authentication
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken);
-                        } else {
-                            // Fallback to anonymous sign-in
-                            await signInAnonymously(auth);
-                        }
-                    }
-                });
-
-            } catch (error) {
-                console.error("Firebase Initialization Error:", error);
-                authInfo.textContent = `Firebase Error: ${error.message}`;
+                const jsonString = JSON.stringify(listData);
+                // Use btoa for Base64 encoding (URL safe enough for this purpose)
+                return btoa(jsonString);
+            } catch (e) {
+                console.error("Error encoding list data:", e);
+                displayError("Error encoding list data for sharing.");
+                return '';
             }
         }
 
-        // --- FIREBASE DATA OPERATIONS ---
-
-        function getListDocRef(code) {
-            if (!db || !appId) return null;
-            const path = `artifacts/${appId}/public/data/grocery_lists`;
-            return doc(db, path, code);
-        }
-
-        function attachRealtimeListener(code) {
-            if (unsubscribeSnapshot) {
-                unsubscribeSnapshot(); // Stop listening to the previous list
-            }
-
-            currentListCode = code;
-            currentListRef = getListDocRef(code);
-            activeCodeDisplay.textContent = code;
-
-            unsubscribeSnapshot = onSnapshot(currentListRef, (docSnapshot) => {
-                if (docSnapshot.exists()) {
-                    setSyncStatus(true, 'Live Sync');
-                    listData = docSnapshot.data();
-                    renderList();
-                } else {
-                    // Document doesn't exist, this should only happen if the user just created it or if they left the list
-                    console.warn(`List with code ${code} does not exist in the database.`);
-                    setSyncStatus(false, `List ${code} not found`);
-                    // Optional: Kick the user back to the connect screen
-                    // disconnectList();
+        /**
+         * Decodes the list data from a Base64 encoded string.
+         * @param {string} encodedData - The Base64 encoded list string.
+         * @returns {object|null} The decoded list object, or null on failure.
+         */
+        function decodeListData(encodedData) {
+            try {
+                // Decode Base64, then parse JSON
+                const jsonString = atob(encodedData);
+                const data = JSON.parse(jsonString);
+                // Basic validation
+                if (data && Array.isArray(data.categories)) {
+                    return data;
                 }
-            }, (error) => {
-                console.error("Firestore Snapshot Error:", error);
-                setSyncStatus(false, 'Sync Error');
-                displayError(`Sync error: ${error.message}`);
-            });
-
-            // Switch UI
-            connectScreen.classList.add('hidden');
-            listContainer.classList.remove('hidden');
+                return null;
+            } catch (e) {
+                console.error("Error decoding list data:", e);
+                displayError("Error decoding list from URL. Starting new list.");
+                return null;
+            }
         }
 
-        // Function to update the data in Firestore (used by all write operations)
-        async function updateListInDB(newData) {
-            if (!currentListRef) {
-                displayError("No active list to update.");
-                return false;
-            }
-            try {
-                // Perform a transaction to ensure atomic updates if needed, but setDoc is fine for this structure
-                await setDoc(currentListRef, { ...newData, lastUpdated: new Date() }, { merge: true });
-                return true;
-            } catch (error) {
-                console.error("Failed to update list:", error);
-                displayError(`Failed to update list: ${error.message}`);
-                return false;
-            }
+        /**
+         * Updates the browser history (URL) with the latest list data.
+         * This is necessary to generate the shareable link.
+         */
+        function updateUrlWithListData() {
+            const encodedData = encodeListData();
+            if (!encodedData) return;
+
+            const url = new URL(window.location.href);
+            url.searchParams.set(LIST_QUERY_PARAM, encodedData);
+
+            // Use replaceState to avoid cluttering history when editing frequently
+            window.history.replaceState({ list: encodedData }, '', url.toString());
+
+            // Optional: Visually confirm the change
+            syncDot.classList.remove('bg-yellow-400');
+            syncDot.classList.add('bg-blue-400');
+            syncText.textContent = 'Link Updated';
+            setTimeout(() => {
+                syncDot.classList.remove('bg-blue-400');
+                syncDot.classList.add('bg-yellow-400');
+                syncText.textContent = 'URL Sync Only';
+            }, 1000);
         }
 
         // --- LIST MANAGEMENT LOGIC ---
 
-        async function createNewList() {
-            let newCode = generateCode();
-            const initialData = {
-                code: newCode,
-                categories: [
-                    { name: "Bakery Items", items: [] },
-                    { name: "Produce (Fruits & Veg)", items: [] }
-                ]
-            };
-            const docRef = getListDocRef(newCode);
-
-            try {
-                // Check if code is already taken (highly unlikely with this method)
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    // Recursive call to generate a different code
-                    return createNewList();
-                }
-
-                await setDoc(docRef, initialData);
-                attachRealtimeListener(newCode);
-
-                showModal('List Created!', `Your new shared code is: ${newCode}. Share it to collaborate!`, [
-                    { text: 'Got it!', isPrimary: true, handler: () => {} }
-                ]);
-
-            } catch (error) {
-                console.error("Error creating new list:", error);
-                displayError(`Could not create list: ${error.message}`);
-            }
+        function updateListAndRender() {
+            renderList();
+            updateUrlWithListData();
         }
 
-        async function joinList(code) {
-            const normalizedCode = code.toUpperCase().trim();
-            if (normalizedCode.length !== 6) {
-                displayError("Code must be 6 characters.");
-                return;
-            }
-
-            const docRef = getListDocRef(normalizedCode);
-            try {
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    attachRealtimeListener(normalizedCode);
-                } else {
-                    displayError(`List code "${normalizedCode}" not found.`);
-                }
-            } catch (error) {
-                console.error("Error joining list:", error);
-                displayError(`Failed to join list: ${error.message}`);
-            }
-        }
 
         function handleAddItemOrCategory(isCategory) {
             const text = newItemText.value.trim();
@@ -392,30 +278,28 @@
                 });
             }
 
-            updateListInDB({ categories: updatedCategories });
+            listData.categories = updatedCategories;
             newItemText.value = ''; // Clear input field
+            updateListAndRender();
         }
 
         function toggleItemChecked(categoryIndex, itemIndex) {
-            let updatedCategories = JSON.parse(JSON.stringify(listData.categories));
-            const item = updatedCategories[categoryIndex].items[itemIndex];
+            const item = listData.categories[categoryIndex].items[itemIndex];
             item.checked = !item.checked;
-            updateListInDB({ categories: updatedCategories });
+            updateListAndRender();
         }
 
         function deleteItem(categoryIndex, itemIndex) {
-            let updatedCategories = JSON.parse(JSON.stringify(listData.categories));
-            updatedCategories[categoryIndex].items.splice(itemIndex, 1);
-            updateListInDB({ categories: updatedCategories });
+            listData.categories[categoryIndex].items.splice(itemIndex, 1);
+            updateListAndRender();
         }
 
         function deleteCategory(categoryIndex) {
              showModal('Confirm Deletion', `Are you sure you want to delete the category "${listData.categories[categoryIndex].name}"? All items inside will be lost.`, [
                 { text: 'Cancel', isPrimary: false, handler: () => {} },
                 { text: 'Delete', isPrimary: true, handler: () => {
-                    let updatedCategories = JSON.parse(JSON.stringify(listData.categories));
-                    updatedCategories.splice(categoryIndex, 1);
-                    updateListInDB({ categories: updatedCategories });
+                    listData.categories.splice(categoryIndex, 1);
+                    updateListAndRender();
                 } }
             ]);
         }
@@ -516,26 +400,59 @@
             });
         }
 
+        /**
+         * Initializes the list data from the URL or starts a new list.
+         */
+        function initializeListFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const encodedData = params.get(LIST_QUERY_PARAM);
+
+            if (encodedData) {
+                const decodedData = decodeListData(encodedData);
+                if (decodedData) {
+                    listData = decodedData;
+                    // For local state, we also save it to localStorage for persistence across tab closes
+                    localStorage.setItem('groceryList', JSON.stringify(listData));
+                    document.getElementById('status-info').textContent = "List status: Loaded from URL link.";
+                } else {
+                    // Decoding failed, load from local storage or start new
+                    loadFromLocalStorageOrNew();
+                }
+            } else {
+                // No list in URL, check localStorage
+                loadFromLocalStorageOrNew();
+            }
+            renderList();
+        }
+
+        function loadFromLocalStorageOrNew() {
+             const localData = localStorage.getItem('groceryList');
+             if (localData) {
+                try {
+                    listData = JSON.parse(localData);
+                    document.getElementById('status-info').textContent = "List status: Loaded from local browser storage.";
+                    // Update URL so it's ready to be shared
+                    updateUrlWithListData();
+                } catch(e) {
+                    listData = INITIAL_LIST_DATA;
+                    document.getElementById('status-info').textContent = "List status: New list started (Local Storage Corrupted).";
+                }
+            } else {
+                listData = INITIAL_LIST_DATA;
+                document.getElementById('status-info').textContent = "List status: New list started.";
+            }
+        }
+
         // --- EVENT LISTENERS & INIT ---
 
         document.addEventListener('DOMContentLoaded', () => {
-            // Setup Firebase and Auth on load
-            setupFirebase();
-
-            // Connect Screen Listeners
-            createNewListBtn.addEventListener('click', () => createNewList());
-            joinListBtn.addEventListener('click', () => joinList(listCodeInput.value));
+            // Load list data
+            initializeListFromUrl();
 
             // Add Item/Category Listeners
             addItemBtn.addEventListener('click', () => handleAddItemOrCategory(false));
             addCategoryBtn.addEventListener('click', () => handleAddItemOrCategory(true));
 
-            // Allow ENTER key to join list
-            listCodeInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    joinList(listCodeInput.value);
-                }
-            });
             // Allow ENTER key to add item
             newItemText.addEventListener('keypress', (e) => {
                  if (e.key === 'Enter') {
@@ -552,22 +469,36 @@
                 });
             }
 
-            // Function to copy the code to clipboard
+            // Function to copy the new shareable URL to clipboard
             window.copyCode = function() {
-                const code = currentListCode;
-                if (!code) return;
+                // Ensure the URL is up to date before copying
+                updateUrlWithListData();
+                const shareUrl = window.location.href;
 
                 const tempInput = document.createElement('textarea');
-                tempInput.value = code;
+                tempInput.value = shareUrl;
                 document.body.appendChild(tempInput);
                 tempInput.select();
                 document.execCommand('copy');
                 document.body.removeChild(tempInput);
 
-                showModal('Code Copied!', `The code ${code} has been copied to your clipboard. Share it with your collaborator!`, [
-                    { text: 'Awesome', isPrimary: true, handler: () => {} }
+                showModal('Link Copied!', `The full list link has been copied to your clipboard. Share this link to send the latest version of the list!`, [
+                    { text: 'Got it!', isPrimary: true, handler: () => {} }
                 ]);
             }
+
+            // Store changes in localStorage immediately to maintain persistence on reload
+            const updateAndStore = (func) => {
+                func();
+                localStorage.setItem('groceryList', JSON.stringify(listData));
+            }
+
+            // Override core list functions to include localStorage saving
+            window.toggleItemChecked = (catIndex, itemIndex) => updateAndStore(() => toggleItemChecked(catIndex, itemIndex));
+            window.deleteItem = (catIndex, itemIndex) => updateAndStore(() => deleteItem(catIndex, itemIndex));
+            window.deleteCategory = (catIndex) => updateAndStore(() => deleteCategory(catIndex));
+            addItemBtn.onclick = () => updateAndStore(() => handleAddItemOrCategory(false));
+            addCategoryBtn.onclick = () => updateAndStore(() => handleAddItemOrCategory(true));
         });
 
     </script>
