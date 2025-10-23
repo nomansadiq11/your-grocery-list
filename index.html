@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shared Grocer List PWA</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary': '#4f46e5',
+                        'secondary': '#60a5fa',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            min-height: 100vh;
+        }
+        .container-shadow {
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        /* Style for checked items */
+        .checked-item {
+            text-decoration: line-through;
+            opacity: 0.6;
+            background-color: #f0fdf4; /* A light green for checked background */
+        }
+        .app-shell {
+            max-width: 600px;
+            margin: auto;
+            min-height: 100vh;
+            background: white;
+            padding: 0;
+        }
+    </style>
+</head>
+<body class="p-4 bg-gray-100">
+
+    <div id="app-shell" class="app-shell container-shadow rounded-lg overflow-hidden">
+        <!-- Header -->
+        <header class="bg-primary text-white p-4 flex justify-between items-center sticky top-0 z-10">
+            <h1 class="text-xl font-bold">Shared Grocery List</h1>
+            <div id="connection-status" class="text-sm font-medium flex items-center">
+                <span id="sync-dot" class="w-2 h-2 rounded-full mr-2 bg-red-400 transition-colors duration-500"></span>
+                <span id="sync-text">Offline/No List</span>
+            </div>
+        </header>
+
+        <main class="p-4">
+
+            <!-- Authentication and Connection Status -->
+            <div id="auth-info" class="text-xs text-gray-500 mb-4 bg-gray-50 p-2 rounded-lg">
+                Loading Auth...
+            </div>
+
+            <!-- Connection/Join Screen -->
+            <div id="connect-screen" class="space-y-4 p-6 border rounded-xl bg-white container-shadow">
+                <h2 class="text-2xl font-semibold text-primary">Start or Join a Shared List</h2>
+                <input type="text" id="list-code-input" placeholder="Enter 6-digit shared code (e.g., ABCDEF)" maxlength="6" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-secondary focus:ring-secondary transition">
+                <div class="flex space-x-3">
+                    <button id="join-list-btn" class="flex-1 bg-secondary hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-lg transition duration-200 shadow-md">
+                        Join List
+                    </button>
+                    <button id="create-new-list-btn" class="flex-1 bg-primary hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg transition duration-200 shadow-md">
+                        Create New List
+                    </button>
+                </div>
+                <p id="error-message" class="text-red-500 text-sm hidden"></p>
+            </div>
+
+            <!-- Grocery List Display (Hidden initially) -->
+            <div id="list-container" class="hidden">
+                <div id="active-code-display" class="text-center mb-4 p-3 bg-primary text-white rounded-lg shadow-md">
+                    <p class="text-sm font-medium">Your Shared Code:</p>
+                    <p id="current-code" class="text-2xl font-extrabold tracking-widest"></p>
+                    <button onclick="copyCode()" class="mt-1 text-xs underline opacity-80 hover:opacity-100">Tap to Copy Code</button>
+                </div>
+
+                <!-- Category and Item Management -->
+                <div id="list-items" class="space-y-6">
+                    <!-- List items will be injected here -->
+                </div>
+
+                <!-- Add Item/Category Form -->
+                <div class="mt-8 p-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+                    <h3 class="text-lg font-semibold mb-3 text-primary">Add New Item or Category</h3>
+                    <input type="text" id="new-item-text" placeholder="e.g., Bananas, or New Category Name" class="w-full p-2 border rounded-lg mb-2 focus:border-secondary transition">
+                    <select id="category-select" class="w-full p-2 border rounded-lg mb-3 bg-white focus:border-secondary transition">
+                        <!-- Options will be populated here -->
+                    </select>
+                    <button id="add-item-btn" class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 rounded-lg transition duration-200">
+                        Add to List
+                    </button>
+                    <button id="add-category-btn" class="w-full mt-2 bg-gray-400 hover:bg-gray-500 text-white font-bold py-2 rounded-lg transition duration-200">
+                        Create New Category
+                    </button>
+                </div>
+            </div>
+
+            <!-- Custom Modal for Confirmation/Alerts -->
+            <div id="custom-modal" class="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center p-4 z-50 hidden">
+                <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6 space-y-4">
+                    <h3 id="modal-title" class="text-xl font-bold text-gray-800"></h3>
+                    <p id="modal-message" class="text-gray-600"></p>
+                    <div id="modal-actions" class="flex justify-end space-x-3">
+                        <!-- Buttons injected by showModal -->
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, runTransaction, getDocs, where, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by the Canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let userId = null;
+        let currentListCode = null;
+        let currentListRef = null;
+        let unsubscribeSnapshot = null;
+        let listData = { categories: [] }; // Local state copy of the list
+
+        // --- DOM Elements ---
+        const connectScreen = document.getElementById('connect-screen');
+        const listContainer = document.getElementById('list-container');
+        const listCodeInput = document.getElementById('list-code-input');
+        const joinListBtn = document.getElementById('join-list-btn');
+        const createNewListBtn = document.getElementById('create-new-list-btn');
+        const activeCodeDisplay = document.getElementById('current-code');
+        const listItemsContainer = document.getElementById('list-items');
+        const categorySelect = document.getElementById('category-select');
+        const newItemText = document.getElementById('new-item-text');
+        const addItemBtn = document.getElementById('add-item-btn');
+        const addCategoryBtn = document.getElementById('add-category-btn');
+        const errorMessage = document.getElementById('error-message');
+        const syncDot = document.getElementById('sync-dot');
+        const syncText = document.getElementById('sync-text');
+        const authInfo = document.getElementById('auth-info');
+
+        // --- UTILITY FUNCTIONS ---
+
+        // Function to show custom modal (replacing alert/confirm)
+        function showModal(title, message, actions) {
+            const modal = document.getElementById('custom-modal');
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-message').textContent = message;
+            const actionsDiv = document.getElementById('modal-actions');
+            actionsDiv.innerHTML = '';
+
+            actions.forEach(action => {
+                const button = document.createElement('button');
+                button.textContent = action.text;
+                button.className = `font-bold py-2 px-4 rounded-lg transition duration-200 ${action.isPrimary ? 'bg-primary text-white hover:bg-indigo-700' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`;
+                button.onclick = () => {
+                    action.handler();
+                    modal.classList.add('hidden');
+                };
+                actionsDiv.appendChild(button);
+            });
+
+            modal.classList.remove('hidden');
+        }
+
+        // Generates a 6-character uppercase alphanumeric code
+        function generateCode() {
+            return Math.random().toString(36).substring(2, 8).toUpperCase();
+        }
+
+        function setSyncStatus(isSynced, message) {
+            if (isSynced) {
+                syncDot.classList.remove('bg-red-400');
+                syncDot.classList.add('bg-green-400');
+                syncText.textContent = message || 'Live Sync';
+            } else {
+                syncDot.classList.remove('bg-green-400');
+                syncDot.classList.add('bg-red-400');
+                syncText.textContent = message || 'Offline/No List';
+            }
+        }
+
+        function displayError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.remove('hidden');
+            setTimeout(() => { errorMessage.classList.add('hidden'); }, 5000);
+        }
+
+        // --- FIREBASE SETUP & AUTHENTICATION ---
+
+        async function setupFirebase() {
+            if (!firebaseConfig) {
+                authInfo.textContent = "Error: Firebase configuration is missing.";
+                return;
+            }
+
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                setLogLevel('debug'); // Enable Firestore logging
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        authInfo.textContent = `User ID: ${userId} (Use for support)`;
+                        setSyncStatus(false, 'Ready');
+                    } else {
+                        // Attempt silent authentication
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            // Fallback to anonymous sign-in
+                            await signInAnonymously(auth);
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase Initialization Error:", error);
+                authInfo.textContent = `Firebase Error: ${error.message}`;
+            }
+        }
+
+        // --- FIREBASE DATA OPERATIONS ---
+
+        function getListDocRef(code) {
+            if (!db || !appId) return null;
+            const path = `artifacts/${appId}/public/data/grocery_lists`;
+            return doc(db, path, code);
+        }
+
+        function attachRealtimeListener(code) {
+            if (unsubscribeSnapshot) {
+                unsubscribeSnapshot(); // Stop listening to the previous list
+            }
+
+            currentListCode = code;
+            currentListRef = getListDocRef(code);
+            activeCodeDisplay.textContent = code;
+
+            unsubscribeSnapshot = onSnapshot(currentListRef, (docSnapshot) => {
+                if (docSnapshot.exists()) {
+                    setSyncStatus(true, 'Live Sync');
+                    listData = docSnapshot.data();
+                    renderList();
+                } else {
+                    // Document doesn't exist, this should only happen if the user just created it or if they left the list
+                    console.warn(`List with code ${code} does not exist in the database.`);
+                    setSyncStatus(false, `List ${code} not found`);
+                    // Optional: Kick the user back to the connect screen
+                    // disconnectList();
+                }
+            }, (error) => {
+                console.error("Firestore Snapshot Error:", error);
+                setSyncStatus(false, 'Sync Error');
+                displayError(`Sync error: ${error.message}`);
+            });
+
+            // Switch UI
+            connectScreen.classList.add('hidden');
+            listContainer.classList.remove('hidden');
+        }
+
+        // Function to update the data in Firestore (used by all write operations)
+        async function updateListInDB(newData) {
+            if (!currentListRef) {
+                displayError("No active list to update.");
+                return false;
+            }
+            try {
+                // Perform a transaction to ensure atomic updates if needed, but setDoc is fine for this structure
+                await setDoc(currentListRef, { ...newData, lastUpdated: new Date() }, { merge: true });
+                return true;
+            } catch (error) {
+                console.error("Failed to update list:", error);
+                displayError(`Failed to update list: ${error.message}`);
+                return false;
+            }
+        }
+
+        // --- LIST MANAGEMENT LOGIC ---
+
+        async function createNewList() {
+            let newCode = generateCode();
+            const initialData = {
+                code: newCode,
+                categories: [
+                    { name: "Bakery Items", items: [] },
+                    { name: "Produce (Fruits & Veg)", items: [] }
+                ]
+            };
+            const docRef = getListDocRef(newCode);
+
+            try {
+                // Check if code is already taken (highly unlikely with this method)
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    // Recursive call to generate a different code
+                    return createNewList();
+                }
+
+                await setDoc(docRef, initialData);
+                attachRealtimeListener(newCode);
+
+                showModal('List Created!', `Your new shared code is: ${newCode}. Share it to collaborate!`, [
+                    { text: 'Got it!', isPrimary: true, handler: () => {} }
+                ]);
+
+            } catch (error) {
+                console.error("Error creating new list:", error);
+                displayError(`Could not create list: ${error.message}`);
+            }
+        }
+
+        async function joinList(code) {
+            const normalizedCode = code.toUpperCase().trim();
+            if (normalizedCode.length !== 6) {
+                displayError("Code must be 6 characters.");
+                return;
+            }
+
+            const docRef = getListDocRef(normalizedCode);
+            try {
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    attachRealtimeListener(normalizedCode);
+                } else {
+                    displayError(`List code "${normalizedCode}" not found.`);
+                }
+            } catch (error) {
+                console.error("Error joining list:", error);
+                displayError(`Failed to join list: ${error.message}`);
+            }
+        }
+
+        function handleAddItemOrCategory(isCategory) {
+            const text = newItemText.value.trim();
+            if (!text) {
+                displayError("Please enter a name for the item or category.");
+                return;
+            }
+
+            let updatedCategories = JSON.parse(JSON.stringify(listData.categories || []));
+
+            if (isCategory) {
+                // Add New Category
+                const categoryExists = updatedCategories.some(c => c.name.toLowerCase() === text.toLowerCase());
+                if (categoryExists) {
+                    displayError(`Category "${text}" already exists.`);
+                    return;
+                }
+                updatedCategories.push({ name: text, items: [] });
+            } else {
+                // Add New Item to Selected Category
+                const selectedCategoryName = categorySelect.value;
+                const categoryIndex = updatedCategories.findIndex(c => c.name === selectedCategoryName);
+
+                if (categoryIndex === -1) {
+                    displayError("Please select a valid category.");
+                    return;
+                }
+
+                // Check for duplicate item (case-insensitive and trimmed)
+                const itemExists = updatedCategories[categoryIndex].items.some(item => item.text.trim().toLowerCase() === text.toLowerCase());
+                if (itemExists) {
+                    displayError(`Item "${text}" already in "${selectedCategoryName}".`);
+                    return;
+                }
+
+                // Add item to the list
+                updatedCategories[categoryIndex].items.push({
+                    text: text,
+                    checked: false
+                });
+            }
+
+            updateListInDB({ categories: updatedCategories });
+            newItemText.value = ''; // Clear input field
+        }
+
+        function toggleItemChecked(categoryIndex, itemIndex) {
+            let updatedCategories = JSON.parse(JSON.stringify(listData.categories));
+            const item = updatedCategories[categoryIndex].items[itemIndex];
+            item.checked = !item.checked;
+            updateListInDB({ categories: updatedCategories });
+        }
+
+        function deleteItem(categoryIndex, itemIndex) {
+            let updatedCategories = JSON.parse(JSON.stringify(listData.categories));
+            updatedCategories[categoryIndex].items.splice(itemIndex, 1);
+            updateListInDB({ categories: updatedCategories });
+        }
+
+        function deleteCategory(categoryIndex) {
+             showModal('Confirm Deletion', `Are you sure you want to delete the category "${listData.categories[categoryIndex].name}"? All items inside will be lost.`, [
+                { text: 'Cancel', isPrimary: false, handler: () => {} },
+                { text: 'Delete', isPrimary: true, handler: () => {
+                    let updatedCategories = JSON.parse(JSON.stringify(listData.categories));
+                    updatedCategories.splice(categoryIndex, 1);
+                    updateListInDB({ categories: updatedCategories });
+                } }
+            ]);
+        }
+
+        // --- UI RENDERING ---
+
+        function renderList() {
+            listItemsContainer.innerHTML = '';
+            categorySelect.innerHTML = '';
+
+            const categories = listData.categories || [];
+
+            if (categories.length === 0) {
+                listItemsContainer.innerHTML = '<p class="text-center text-gray-500 p-8">No categories found. Use the form below to add one!</p>';
+                categorySelect.innerHTML = '<option value="" disabled selected>No Categories Available</option>';
+                return;
+            }
+
+            // 1. Render Category Select Options
+            categories.forEach(category => {
+                const option = document.createElement('option');
+                option.value = category.name;
+                option.textContent = category.name;
+                categorySelect.appendChild(option);
+            });
+
+            // 2. Render List Structure
+            categories.forEach((category, catIndex) => {
+                const categoryDiv = document.createElement('div');
+                categoryDiv.className = 'bg-white rounded-xl shadow-lg p-4 mb-6';
+
+                // Category Header
+                const header = document.createElement('div');
+                header.className = 'flex justify-between items-center mb-3 pb-2 border-b-2 border-primary/20';
+
+                const title = document.createElement('h3');
+                title.className = 'text-lg font-extrabold text-primary flex items-center';
+                title.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path d="M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zM5 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zM11 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2h-2zM11 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2h-2z" /></svg><span>${category.name}</span>`;
+                header.appendChild(title);
+
+                const deleteCatBtn = document.createElement('button');
+                deleteCatBtn.className = 'text-red-500 hover:text-red-700 p-1 rounded-full';
+                deleteCatBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>';
+                deleteCatBtn.onclick = () => deleteCategory(catIndex);
+                header.appendChild(deleteCatBtn);
+
+                categoryDiv.appendChild(header);
+
+                // Items List
+                const ul = document.createElement('ul');
+                ul.className = 'space-y-2';
+
+                if (category.items && category.items.length > 0) {
+                    // Separate checked and unchecked items for sorting
+                    const uncheckedItems = category.items.filter(item => !item.checked);
+                    const checkedItems = category.items.filter(item => item.checked);
+                    const sortedItems = [...uncheckedItems, ...checkedItems]; // Unchecked first
+
+                    sortedItems.forEach((item, itemIndex) => {
+                        // Find original index in category.items to keep the data mapping correct for updates
+                        const originalIndex = category.items.findIndex(i => i.text === item.text && i.checked === item.checked);
+
+                        const li = document.createElement('li');
+                        li.className = `flex items-center justify-between p-3 rounded-lg transition duration-150 cursor-pointer ${item.checked ? 'checked-item' : 'hover:bg-gray-50'}`;
+
+                        // Checkbox and Text
+                        const leftSide = document.createElement('div');
+                        leftSide.className = 'flex items-center flex-1 min-w-0';
+                        leftSide.onclick = () => toggleItemChecked(catIndex, originalIndex); // Toggle on click of left side
+
+                        const checkbox = document.createElement('input');
+                        checkbox.type = 'checkbox';
+                        checkbox.checked = item.checked;
+                        checkbox.className = 'h-5 w-5 text-primary border-gray-300 rounded focus:ring-primary mr-3';
+                        leftSide.appendChild(checkbox);
+
+                        const itemText = document.createElement('span');
+                        itemText.textContent = item.text;
+                        itemText.className = 'text-gray-800 break-words';
+                        leftSide.appendChild(itemText);
+                        li.appendChild(leftSide);
+
+                        // Delete Button
+                        const deleteBtn = document.createElement('button');
+                        deleteBtn.className = 'text-gray-400 hover:text-red-500 p-2 rounded-full transition duration-150 flex-shrink-0';
+                        deleteBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>';
+                        deleteBtn.onclick = () => deleteItem(catIndex, originalIndex);
+                        li.appendChild(deleteBtn);
+
+                        ul.appendChild(li);
+                    });
+                } else {
+                    ul.innerHTML = '<li class="text-gray-400 text-sm italic p-2">List is empty. Add an item!</li>';
+                }
+
+                categoryDiv.appendChild(ul);
+                listItemsContainer.appendChild(categoryDiv);
+            });
+        }
+
+        // --- EVENT LISTENERS & INIT ---
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // Setup Firebase and Auth on load
+            setupFirebase();
+
+            // Connect Screen Listeners
+            createNewListBtn.addEventListener('click', () => createNewList());
+            joinListBtn.addEventListener('click', () => joinList(listCodeInput.value));
+
+            // Add Item/Category Listeners
+            addItemBtn.addEventListener('click', () => handleAddItemOrCategory(false));
+            addCategoryBtn.addEventListener('click', () => handleAddItemOrCategory(true));
+
+            // Allow ENTER key to join list
+            listCodeInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    joinList(listCodeInput.value);
+                }
+            });
+            // Allow ENTER key to add item
+            newItemText.addEventListener('keypress', (e) => {
+                 if (e.key === 'Enter') {
+                    handleAddItemOrCategory(false);
+                }
+            });
+
+            // PWA Registration Simulation
+            if ('serviceWorker' in navigator) {
+                window.addEventListener('load', () => {
+                    navigator.serviceWorker.register('/service-worker.js', { scope: '/' })
+                        .then(registration => console.log('SW registered: ', registration.scope))
+                        .catch(registrationError => console.log('SW registration failed: ', registrationError));
+                });
+            }
+
+            // Function to copy the code to clipboard
+            window.copyCode = function() {
+                const code = currentListCode;
+                if (!code) return;
+
+                const tempInput = document.createElement('textarea');
+                tempInput.value = code;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempInput);
+
+                showModal('Code Copied!', `The code ${code} has been copied to your clipboard. Share it with your collaborator!`, [
+                    { text: 'Awesome', isPrimary: true, handler: () => {} }
+                ]);
+            }
+        });
+
+    </script>
+
+    <!-- PWA Manifest Simulation (Note: In a real PWA, this would be a separate file) -->
+    <link rel="manifest" href="data:application/json;base64,eyJpY29ucyI6IFt7InNpemVzIjogIjE5MngxOTAiLCAic3JjIjogImh0dHBzOi8vcGxhY2Vob2xkLmNvLzE5MngxOTAiLCAidHlwZSI6ICJpbWFnZS9wbmciLCAiZGVub21pbmF0b3IiOiAiY2FudmFzIn0sIHsic2l6ZXMiOiAiMjU2eDI1NiIsICJzcmMiOiAiaHR0cHM6Ly9wbGFjZWhvbGQuY28vMjU2eDI1NiIsICJ0eXBlIjogImltYWdlL3BuZyIsICJkZW5vbWluYXRvciI6ICJjYW52YXMifSwgeyJzaXplcyI6ICIzODR4Mzg0IiwgInNyYyI6ICJodHRwczovL3BsYWNlaG9sZC5jby8zODR4Mzg0IiwgInR5cGUiOiAiaW1hZ2UvcG5nIiwgImRlbm9taW5hdG9yIjogImNhbnZhcyJ9LCB7InNpemVzIjogIjUxMng1MTIiLCAic3JjIjogImh0dHBzOi8vcGxhY2Vob2xkLmNvLzUxMng1MTIiLCAidHlwZSI6ICJpbWFnZS9wbmciLCAiZGVub21pbmF0b3IiOiAiY2FudmFzIn1dLCAiZGlzcGxheSI6ICJzdGFuZGFsb25lIiwgIm5hbWUiOiAiU2hhcmVkIEdyb2NlcnkgTGlzdCIsICJzaG9ydF9uYW1lIjogIkdyb2NlcnlMaXN0IiwgInN0YXJ0X3VybCI6ICIuLyIsICJ0aGVtZV9jb2xvciI6ICIjNGY0NjU1IiwgImJhY2tncm91bmRfY29sb3IiOiAiI2ZmZmZmZiJ9">
+</body>
+</html>
